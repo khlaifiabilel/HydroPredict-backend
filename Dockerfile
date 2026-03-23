@@ -1,18 +1,22 @@
-FROM python:3.10-slim
+FROM nvidia/cuda:12.1-cudnn8-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install system dependencies
+# Install Python and system dependencies
 RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3.10-venv \
     gcc \
     g++ \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python
 
 # Copy requirements first for better caching
 COPY requirements.txt .
-# Install PyTorch CPU-only version first (smaller download)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# Install PyTorch with CUDA support
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code

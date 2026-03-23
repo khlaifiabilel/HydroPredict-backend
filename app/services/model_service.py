@@ -62,7 +62,7 @@ class ModelService:
                     break
             
             # Import inference module
-            from src.inference.predict import ModelInference
+            from inference.predict import ModelInference
             
             logger.info(f"Loading model from {checkpoint_path}")
             
