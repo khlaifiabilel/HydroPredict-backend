@@ -44,18 +44,24 @@ class ModelService:
             True if model loaded successfully
         """
         try:
-            # Add HydroPredict-model to path for imports
-            # This is needed because the inference code lives in HydroPredict-model
-            model_project_root = Path(__file__).parent.parent.parent.parent / "HydroPredict-model"
-            if not model_project_root.exists():
-                # Try alternative path
-                model_project_root = Path("/home/nextav/workspace/HydroPredict-model")
+            # Add model source paths for imports
+            # Check multiple possible locations for flexibility
+            possible_paths = [
+                Path("/app/model_src"),  # Docker container
+                Path(__file__).parent.parent.parent / "model_src",  # Local backend/model_src
+                Path(__file__).parent.parent.parent.parent / "HydroPredict-model",  # Development sibling
+                Path("/home/nextav/workspace/HydroPredict-model"),  # Fallback absolute
+            ]
             
-            if str(model_project_root) not in sys.path:
-                sys.path.insert(0, str(model_project_root))
-                logger.info(f"Added to path: {model_project_root}")
+            for p in possible_paths:
+                if p.exists():
+                    target_path = str(p)
+                    if target_path not in sys.path:
+                        sys.path.insert(0, target_path)
+                        logger.info(f"Added to path: {target_path}")
+                    break
             
-            # Import inference module from HydroPredict-model
+            # Import inference module
             from src.inference.predict import ModelInference
             
             logger.info(f"Loading model from {checkpoint_path}")

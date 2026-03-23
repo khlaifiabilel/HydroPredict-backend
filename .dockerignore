@@ -1,0 +1,57 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temp
+temp/
+tmp/
+
+# Lightning logs (not needed in container)
+lightning_logs/
+
+# Keep checkpoints, configs, and data (they are explicitly copied)
+
