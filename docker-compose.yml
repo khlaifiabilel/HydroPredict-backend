@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - DEBUG=true
+      - ENVIRONMENT=development
+      - MODEL_CHECKPOINT_PATH=/model/checkpoints/version_010_20260216_104439/hydropredict-epoch=epoch=08-val_loss=val_loss=1.6287.ckpt
+      - MODEL_CONFIG_PATH=/model/configs/model_config.json
+      - HISTORICAL_DATA_PATH=/model/data/input/hourly-data-2024-2025.csv
+      - WEATHERBIT_CONFIG_PATH=/model/configs/weatherbit.json
+    volumes:
+      - ../HydroPredict-model:/model:ro
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Redis for production caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
