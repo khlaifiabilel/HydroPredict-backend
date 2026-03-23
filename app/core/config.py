@@ -21,21 +21,21 @@ class Settings(BaseSettings):
     
     # Model Configuration
     model_checkpoint_path: str = Field(
-        default="../HydroPredict-model/checkpoints/version_010_20260216_104439/hydropredict-epoch=epoch=08-val_loss=val_loss=1.6287.ckpt",
+        default="checkpoints/final_model.ckpt",
         description="Path to model checkpoint"
     )
     model_config_path: str = Field(
-        default="../HydroPredict-model/configs/model_config.json",
+        default="configs/model_config.json",
         description="Path to model configuration"
     )
     historical_data_path: str = Field(
-        default="../HydroPredict-model/data/input/hourly-data-2024-2025.csv",
+        default="data/input/hourly-data-2024-2025.csv",
         description="Path to historical data"
     )
     
     # Weatherbit API
     weatherbit_config_path: str = Field(
-        default="../HydroPredict-model/configs/weatherbit.json",
+        default="configs/weatherbit.json",
         description="Path to Weatherbit configuration"
     )
     weatherbit_api_key: Optional[str] = Field(default=None, description="Weatherbit API key")
@@ -73,4 +73,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-
