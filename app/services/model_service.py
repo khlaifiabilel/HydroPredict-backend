@@ -45,9 +45,15 @@ class ModelService:
         """
         try:
             # Add HydroPredict-model to path for imports
-            model_project_root = Path(checkpoint_path).parent.parent.parent
+            # This is needed because the inference code lives in HydroPredict-model
+            model_project_root = Path(__file__).parent.parent.parent.parent / "HydroPredict-model"
+            if not model_project_root.exists():
+                # Try alternative path
+                model_project_root = Path("/home/nextav/workspace/HydroPredict-model")
+            
             if str(model_project_root) not in sys.path:
                 sys.path.insert(0, str(model_project_root))
+                logger.info(f"Added to path: {model_project_root}")
             
             # Import inference module from HydroPredict-model
             from src.inference.predict import ModelInference

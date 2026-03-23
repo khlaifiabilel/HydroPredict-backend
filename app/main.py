@@ -36,16 +36,23 @@ def load_model():
     checkpoint_path = settings.model_checkpoint_path
     config_path = settings.model_config_path
     
-    # Resolve relative paths
-    if not Path(checkpoint_path).is_absolute():
-        checkpoint_path = str(Path(__file__).parent.parent / checkpoint_path)
-    if not Path(config_path).is_absolute():
-        config_path = str(Path(__file__).parent.parent / config_path)
+    # Get the backend root directory
+    backend_root = Path(__file__).parent.parent
     
-    # Add model project to path
-    model_project_root = Path(checkpoint_path).parent.parent.parent
-    if str(model_project_root) not in sys.path:
+    # Resolve relative paths from backend root
+    if not Path(checkpoint_path).is_absolute():
+        checkpoint_path = str(backend_root / checkpoint_path)
+    if not Path(config_path).is_absolute():
+        config_path = str(backend_root / config_path)
+    
+    # Add HydroPredict-model to path for imports (sibling folder)
+    model_project_root = backend_root.parent / "HydroPredict-model"
+    if not model_project_root.exists():
+        model_project_root = Path("/home/nextav/workspace/HydroPredict-model")
+    
+    if model_project_root.exists() and str(model_project_root) not in sys.path:
         sys.path.insert(0, str(model_project_root))
+        logger.info(f"Added to path: {model_project_root}")
     
     if Path(checkpoint_path).exists():
         success = model_service.load_model(checkpoint_path, config_path)
