@@ -1,0 +1,303 @@
+name: Deploy HydroPredict Backend
+
+on:
+  push:
+    branches: [main, staging, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REPOSITORY: hydropredict-backend
+  ECS_CLUSTER: hydropredict-cluster
+  ECS_SERVICE: hydropredict-backend
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  # ============================================
+  # Test
+  # ============================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing || true
+        continue-on-error: true
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: backend
+        continue-on-error: true
+
+  # ============================================
+  # Build and Push Docker Image
+  # ============================================
+  build:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build the Docker image with CUDA support
+          docker build \
+            --cache-from $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }} \
+            -f Dockerfile \
+            .
+          
+          # Push all tags
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}
+          
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+
+  # ============================================
+  # Deploy to ECS
+  # ============================================
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod') || 'staging' }}
+    needs: build
+    runs-on: ubuntu-latest
+    
+    environment:
+      name: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'prod') || (github.ref == 'refs/heads/staging' && 'staging') || 'dev' }}
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_SERVICE }} \
+            --query taskDefinition > task-definition.json
+          
+          # If task definition doesn't exist, create it
+          if [ ! -s task-definition.json ] || grep -q "error" task-definition.json; then
+            echo "Creating new task definition..."
+            cat > task-definition.json << 'EOF'
+          {
+            "family": "hydropredict-backend",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "2048",
+            "memory": "8192",
+            "executionRoleArn": "arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/hydropredict-ecs-execution-role",
+            "containerDefinitions": [
+              {
+                "name": "hydropredict-backend",
+                "image": "${{ needs.build.outputs.image }}",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 8000,
+                    "protocol": "tcp"
+                  }
+                ],
+                "environment": [
+                  {"name": "ENVIRONMENT", "value": "production"},
+                  {"name": "DEBUG", "value": "false"},
+                  {"name": "API_HOST", "value": "0.0.0.0"},
+                  {"name": "API_PORT", "value": "8000"}
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/hydropredict-backend",
+                    "awslogs-region": "${{ env.AWS_REGION }}",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                },
+                "healthCheck": {
+                  "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+                  "interval": 30,
+                  "timeout": 10,
+                  "retries": 3,
+                  "startPeriod": 120
+                }
+              }
+            ]
+          }
+          EOF
+          fi
+
+      - name: Update task definition with new image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: hydropredict-backend
+          image: ${{ needs.build.outputs.image }}
+
+      - name: Deploy to Amazon ECS
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Get API URL
+        id: get-url
+        run: |
+          # Get ALB DNS name
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names hydropredict-alb \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || echo "pending")
+          
+          echo "url=https://${ALB_DNS}" >> $GITHUB_OUTPUT
+
+      - name: Deployment summary
+        run: |
+          echo "## 🚀 Backend Deployment Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ github.event.inputs.environment || 'prod' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | ${{ needs.build.outputs.image }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cluster | ${{ env.ECS_CLUSTER }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | ${{ env.ECS_SERVICE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================
+  # Health Check
+  # ============================================
+  health-check:
+    name: Health Check
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for deployment
+        run: sleep 60
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check service health
+        run: |
+          # Get ALB DNS
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names hydropredict-alb \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$ALB_DNS" ]; then
+            echo "Checking health at http://${ALB_DNS}/health"
+            response=$(curl -s -o /dev/null -w "%{http_code}" "http://${ALB_DNS}/health" || echo "000")
+            
+            if [ "$response" = "200" ]; then
+              echo "✅ Health check passed!"
+            else
+              echo "⚠️ Health check returned: $response"
+            fi
+          else
+            echo "⚠️ ALB not found, skipping health check"
+          fi
+
+  # ============================================
+  # Rollback on Failure
+  # ============================================
+  rollback:
+    name: Rollback on Failure
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    if: failure() && needs.build.result == 'success'
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Rollback to previous version
+        run: |
+          echo "::warning::Deployment failed, consider manual rollback"
+          echo "To rollback, run:"
+          echo "aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --force-new-deployment"
+

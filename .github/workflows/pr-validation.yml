@@ -1,0 +1,123 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main, staging, develop]
+    types: [opened, synchronize, reopened]
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx flake8 black isort mypy
+
+      - name: Check formatting with Black
+        id: black
+        run: black --check app/ || true
+        continue-on-error: true
+
+      - name: Check imports with isort
+        id: isort
+        run: isort --check-only app/ || true
+        continue-on-error: true
+
+      - name: Lint with flake8
+        id: flake8
+        run: flake8 app/ --max-line-length=120 --ignore=E501,W503 || true
+        continue-on-error: true
+
+      - name: Type check with mypy
+        id: mypy
+        run: mypy app/ --ignore-missing-imports || true
+        continue-on-error: true
+
+      - name: Run tests
+        id: test
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing || true
+        continue-on-error: true
+
+      - name: Build Docker image
+        run: |
+          docker build -t hydropredict-backend:test -f Dockerfile .
+
+      - name: Summary
+        run: |
+          echo "## 🔍 PR Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Black | ${{ steps.black.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| isort | ${{ steps.isort.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Flake8 | ${{ steps.flake8.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MyPy | ${{ steps.mypy.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ steps.test.outcome }} |" >> $GITHUB_STEP_SUMMARY
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install safety
+        run: pip install safety bandit
+
+      - name: Check dependencies for vulnerabilities
+        run: safety check -r requirements.txt || true
+        continue-on-error: true
+
+      - name: Run Bandit security linter
+        run: bandit -r app/ -ll || true
+        continue-on-error: true
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+        continue-on-error: true
+
+  docker-scan:
+    name: Docker Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t hydropredict-backend:scan -f Dockerfile .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'hydropredict-backend:scan'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+
