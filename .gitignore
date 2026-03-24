@@ -116,10 +116,14 @@ data/output/*
 !data/input/.gitkeep
 !data/output/.gitkeep
 
-# Model checkpoints (should be in HydroPredict-model)
+# Model checkpoints - stored in S3, not in git
+# Download from: s3://hydropredict-model-artifacts-387677210037/checkpoints/
+checkpoints/
 *.ckpt
 *.pt
 *.pth
+*.pkl
+!checkpoints/.gitkeep
 
 # Logs
 logs/
